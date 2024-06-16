@@ -1,88 +1,47 @@
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
-const archiver = require('archiver');
 
 const app = express();
-const port = 3000;
 
-// Middleware to parse JSON bodies
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-
-// Ensure the uploads directory exists
-if (!fs.existsSync(path.join(__dirname, 'uploads'))) {
-    fs.mkdirSync(path.join(__dirname, 'uploads'));
-}
-
-// Helper function to get folder structure
-const getFolderStructure = (dirPath) => {
-    const result = [];
-    const files = fs.readdirSync(dirPath);
-
-    files.forEach(file => {
-        // Ignore hidden files
-        if (file.startsWith('.')) {
-            return;
-        }
-
-        const filePath = path.join(dirPath, file);
-        const stat = fs.lstatSync(filePath);
-
-        if (stat.isDirectory()) {
-            // Recursively get files in subdirectories
-            const subDirFiles = getFolderStructure(filePath);
-            result.push(...subDirFiles.map(subFile => path.join(file, subFile)));
-        } else {
-            result.push(file);
-        }
-    });
-
-    return result;
+// Middleware to exclude hidden folders
+const excludeHiddenFolders = (req, res, next) => {
+  req.includeHidden = false;
+  next();
 };
 
-// Endpoint to list folders and files in a folder structure
-app.get('/folder-structure', (req, res) => {
-    try {
-        const folderStructure = getFolderStructure(path.join(__dirname, 'uploads'));
-        res.json(folderStructure);
-    } catch (err) {
-        console.error('Error listing folder structure:', err);
-        res.status(500).json({ error: 'Unable to list folder structure' });
+// Helper function to recursively get files in directories, excluding hidden folders
+const getFilesRecursively = (directoryPath) => {
+    let files = [];
+    fs.readdirSync(directoryPath).forEach(file => {
+        const fullPath = path.join(directoryPath, file);
+        if (fs.lstatSync(fullPath).isDirectory() && !file.startsWith('.')) {
+            files = files.concat(getFilesRecursively(fullPath));
+        } else if (!file.startsWith('.')) {
+            files.push(fullPath);
+        }
+    });
+    return files;
+};
+
+// Download endpoint to list all files in folders excluding hidden folders
+app.get('/files', excludeHiddenFolders, (req, res) => {
+    const directoryPath = path.join(__dirname, 'uploads');
+    const files = getFilesRecursively(directoryPath).map(file => path.relative(directoryPath, file));
+    res.json(files);
+});
+
+// Endpoint to download a specific file
+app.get('/files/*', (req, res) => {
+    const filePath = path.join(__dirname, 'uploads', req.params[0]);
+    if (fs.existsSync(filePath) && fs.lstatSync(filePath).isFile()) {
+        res.download(filePath);
+    } else {
+        res.status(404).send('File not found');
     }
 });
 
-// Endpoint to download all files in the upload folder as a zip
-app.get('/download-all', (req, res) => {
-    const uploadDir = path.join(__dirname, 'uploads');
-    const zipFilePath = path.join(__dirname, 'uploads.zip');
-
-    const output = fs.createWriteStream(zipFilePath);
-    const archive = archiver('zip', {
-        zlib: { level: 9 }
-    });
-
-    output.on('close', function() {
-        res.download(zipFilePath, 'uploads.zip', (err) => {
-            if (err) {
-                console.error('Error downloading file:', err);
-                res.status(500).json({ error: 'Error downloading file' });
-            }
-            // Delete the zip file after sending it
-            fs.unlinkSync(zipFilePath);
-        });
-    });
-
-    archive.on('error', function(err) {
-        throw err;
-    });
-
-    archive.pipe(output);
-    archive.directory(uploadDir, false);
-    archive.finalize();
-});
-
-// Start the server
+const port = 3000;
 app.listen(port, () => {
-    console.log(`Server is running on http://localhost:${port}`);
+    console.log(`Server running on port ${port}`);
 });
