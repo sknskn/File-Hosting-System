@@ -1,7 +1,7 @@
 const express = require('express');
-const multer = require('multer');
 const fs = require('fs');
 const path = require('path');
+const archiver = require('archiver');
 
 const app = express();
 const port = 3000;
@@ -14,26 +14,6 @@ app.use(express.urlencoded({ extended: true }));
 if (!fs.existsSync(path.join(__dirname, 'uploads'))) {
     fs.mkdirSync(path.join(__dirname, 'uploads'));
 }
-
-// Set up multer storage with dynamic destination
-const storage = multer.diskStorage({
-    destination: (req, file, cb) => {
-        const folder = req.body.folder || '';
-        const uploadPath = path.join(__dirname, 'uploads', folder);
-
-        // Ensure the folder exists
-        fs.mkdirSync(uploadPath, { recursive: true });
-
-        cb(null, uploadPath);
-    },
-    filename: (req, file, cb) => {
-        cb(null, file.originalname);
-    }
-});
-const upload = multer({ storage });
-
-// Serve static files
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // Helper function to get folder structure
 const getFolderStructure = (dirPath) => {
@@ -72,34 +52,34 @@ app.get('/folder-structure', (req, res) => {
     }
 });
 
-// Endpoint to list files
-app.get('/files', (req, res) => {
-    fs.readdir(path.join(__dirname, 'uploads'), (err, files) => {
-        if (err) {
-            console.error('Error listing files:', err);
-            return res.status(500).json({ error: 'Unable to list files' });
-        }
-        res.json(files);
-    });
-});
+// Endpoint to download all files in the upload folder as a zip
+app.get('/download-all', (req, res) => {
+    const uploadDir = path.join(__dirname, 'uploads');
+    const zipFilePath = path.join(__dirname, 'uploads.zip');
 
-// Endpoint to upload files with folder support
-app.post('/upload', upload.single('file'), (req, res) => {
-    if (!req.file) {
-        return res.status(400).json({ error: 'No file uploaded' });
-    }
-    res.json({ message: 'File uploaded successfully', file: req.file });
-});
-
-// Endpoint to download a file
-app.get('/files/:filename', (req, res) => {
-    const filePath = path.join(__dirname, 'uploads', req.params.filename);
-    res.download(filePath, err => {
-        if (err) {
-            console.error('Error downloading file:', err);
-            return res.status(404).json({ error: 'File not found' });
-        }
+    const output = fs.createWriteStream(zipFilePath);
+    const archive = archiver('zip', {
+        zlib: { level: 9 }
     });
+
+    output.on('close', function() {
+        res.download(zipFilePath, 'uploads.zip', (err) => {
+            if (err) {
+                console.error('Error downloading file:', err);
+                res.status(500).json({ error: 'Error downloading file' });
+            }
+            // Delete the zip file after sending it
+            fs.unlinkSync(zipFilePath);
+        });
+    });
+
+    archive.on('error', function(err) {
+        throw err;
+    });
+
+    archive.pipe(output);
+    archive.directory(uploadDir, false);
+    archive.finalize();
 });
 
 // Start the server
